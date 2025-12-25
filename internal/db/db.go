@@ -10,19 +10,30 @@ import (
 
 var Pool *pgxpool.Pool
 
+func InitWithRetry(ctx context.Context, databaseURL string, attempts int, delay time.Duration) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		err = Init(ctx, databaseURL)
+		if err == nil {
+			return nil
+		}
+		// Wait and retry
+		time.Sleep(delay)
+	}
+	return fmt.Errorf("db init failed after %d attempts: %w", attempts, err)
+}
+
 func Init(ctx context.Context, databaseURL string) error {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return fmt.Errorf("parse db url: %w", err)
 	}
-	// configure pool options if desired
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("create pool: %w", err)
 	}
 	Pool = pool
-
-	// run migrations / create tables
+	// create simple tables if not exist
 	if err := CreateTables(ctx); err != nil {
 		return err
 	}

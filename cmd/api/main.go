@@ -9,14 +9,17 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	natsio "github.com/nats-io/nats.go"
+	nats "github.com/nats-io/nats.go"
 
 	"audioml/cmd/api/handlers"
 	"audioml/internal/config"
 	"audioml/internal/db"
 	"audioml/internal/logger"
-	"audioml/internal/nats"
+	natspkg "audioml/internal/nats"
+	"audioml/internal/preprocessing"
 	s3pkg "audioml/internal/s3"
+	"audioml/internal/trainer"
+	"audioml/internal/training"
 )
 
 func main() {
@@ -28,14 +31,14 @@ func main() {
 	}
 	logger.InitLogger(cfg.Env)
 
-	// DB
-	if err := db.Init(ctx, cfg.DatabaseURL); err != nil {
+	// DB init with retry: try 8 times with 2s interval
+	if err := db.InitWithRetry(ctx, cfg.DatabaseURL, 8, 2*time.Second); err != nil {
 		logger.L.Fatalf("db init: %v", err)
 	}
 	defer db.Close()
 
-	// NATS connect and JetStream context
-	nc, err := nats.Connect(cfg.NatsURL)
+	// NATS
+	nc, err := natspkg.Connect(cfg.NatsURL)
 	if err != nil {
 		logger.L.Fatalf("nats connect: %v", err)
 	}
@@ -45,19 +48,17 @@ func main() {
 	if err != nil {
 		logger.L.Fatalf("jetstream: %v", err)
 	}
-
-	// ensure stream exists (simple stream)
-	streamCfg := &natsio.StreamConfig{
+	// ensure stream exists (best effort)
+	streamCfg := &nats.StreamConfig{
 		Name:     "AUDIO_STREAM",
 		Subjects: []string{"audio.ingest.raw"},
-		Storage:  natsio.FileStorage,
+		Storage:  nats.FileStorage,
 	}
 	if _, err := js.AddStream(streamCfg); err != nil {
-		// stream might already exist; log only
-		logger.L.Printf("add stream: %v", err)
+		logger.L.Printf("add stream: %v (maybe already exists)", err)
 	}
 
-	// S3 client
+	// MinIO
 	s3c, err := s3pkg.NewMinioClient(cfg)
 	if err != nil {
 		logger.L.Fatalf("s3 init: %v", err)
@@ -66,28 +67,55 @@ func main() {
 		logger.L.Printf("make bucket: %v", err)
 	}
 
+	prepRepo := preprocessing.NewPostgresRepo()
+
+	pipeline := &preprocessing.Pipeline{
+		Repo:   prepRepo,
+		// S3:     s3c,
+		Python: "python",
+	}
+
+	worker := &preprocessing.Worker{
+		Pipeline: pipeline,
+		Repo:     prepRepo,
+	}
+
+	if err := worker.Start(js); err != nil {
+		logger.L.Fatalf("preprocessing worker: %v", err)
+	}
+
+	// Training
+	trainingRepo := training.NewPostgresRepo()
+	trainingService := training.NewService(trainingRepo)
+	trainerRunner := trainer.NewPythonRunner("python", "trainer/train.py")
+
+	th := &handlers.TrainingHandler{
+		Service: trainingService,
+		Repo:    trainingRepo,
+		Runner:  trainerRunner,
+	}
+
 	// Router
 	r := mux.NewRouter()
-	// health
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	}).Methods("GET")
 
-	// upload handler
 	uh := &handlers.UploadHandler{
 		S3Client: s3c,
 		JS:       js,
 	}
-	uh.Register(r)
+	uh.Register(r) // uh UploadHandler
+	th.Register(r) // uh TrainingHandler
 
 	srv := &http.Server{
 		Handler:      r,
 		Addr:         ":" + cfg.Port,
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  30 * time.Second,
 	}
 
-	// run server
+	// start server
 	go func() {
 		logger.L.Printf("api listening on :%s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -95,10 +123,10 @@ func main() {
 		}
 	}()
 
-	// graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	<-c
+	// graceful shutdown on Ctrl-C
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	<-quit
 	logger.L.Printf("shutting down")
 	ctxShut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

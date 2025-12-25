@@ -15,11 +15,11 @@ import (
 
 	"audioml/internal/db"
 	ilog "audioml/internal/logger"
-	natspkg "audioml/internal/nats"
+	"audioml/internal/nats"
 	"audioml/internal/s3"
 )
 
-// UploadHandler handles file uploads or registering S3 URLs.
+// UploadHandler handles file uploads and S3 URL registration
 type UploadHandler struct {
 	S3Client *s3.MinioClient
 	JS       natslib.JetStreamContext
@@ -35,9 +35,10 @@ type registerS3Req struct {
 
 func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	contentType := r.Header.Get("Content-Type")
 
-	// If JSON body with s3_url
-	if r.Header.Get("Content-Type") == "application/json" {
+	// JSON -> register external S3 path
+	if contentType == "application/json" {
 		var req registerS3Req
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
@@ -47,7 +48,6 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "s3_url required", http.StatusBadRequest)
 			return
 		}
-		// create DB row and publish
 		if err := insertAudioAndPublish(ctx, req.S3URL, "", h.S3Client, h.JS); err != nil {
 			ilog.L.Printf("register s3 error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -58,26 +58,19 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// otherwise multipart file
-	if err := r.ParseMultipartForm(200 << 20); err != nil {
+	// Expect multipart file upload under field name "file"
+	if err := r.ParseMultipartForm(500 << 20); err != nil {
 		http.Error(w, "cannot parse multipart", http.StatusBadRequest)
 		return
 	}
-	fh, _, err := r.FormFile("file")
+	file, fh, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "file form field 'file' required", http.StatusBadRequest)
 		return
 	}
-	defer fh.Close()
+	defer file.Close()
 
-	// read file bytes
-	buf := new(bytes.Buffer)
-	if _, err := io.Copy(buf, fh); err != nil {
-		ilog.L.Printf("read file: %v", err)
-		http.Error(w, "read file error", http.StatusInternalServerError)
-		return
-	}
-	filename := r.FormValue("filename")
+	filename := fh.Filename
 	if filename == "" {
 		filename = uuid.New().String() + ".wav"
 	}
@@ -85,18 +78,27 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if ext == "" {
 		ext = ".wav"
 	}
+
 	objectName := fmt.Sprintf("raw/%s%s", uuid.New().String(), ext)
 
-	// upload to minio
-	if err := h.S3Client.UploadFromReader(ctx, objectName, bytes.NewReader(buf.Bytes()), int64(buf.Len()), "audio/wav"); err != nil {
+	// Stream upload directly to MinIO using PutObject
+	// We need the file size; if unknown, you can buffer, but streaming with a ReaderSeeker is better.
+	var buf bytes.Buffer
+	size, err := io.Copy(&buf, file)
+	if err != nil {
+		ilog.L.Printf("read multipart file: %v", err)
+		http.Error(w, "read error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.S3Client.UploadFromReader(ctx, objectName, bytes.NewReader(buf.Bytes()), size, fh.Header.Get("Content-Type")); err != nil {
 		ilog.L.Printf("s3 upload: %v", err)
 		http.Error(w, "upload error", http.StatusInternalServerError)
 		return
 	}
-	s3Path := objectName
 
-	// insert DB row and publish event
-	if err := insertAudioAndPublish(ctx, s3Path, filename, h.S3Client, h.JS); err != nil {
+	// Insert DB row and publish ingest event
+	if err := insertAudioAndPublish(ctx, objectName, filename, h.S3Client, h.JS); err != nil {
 		ilog.L.Printf("insert/publish: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -106,9 +108,8 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"queued"}`))
 }
 
-// insertAudioAndPublish inserts audio_files and ingestion_job and publishes a NATS ingest event.
 func insertAudioAndPublish(ctx context.Context, s3Path, filename string, s3client *s3.MinioClient, js natslib.JetStreamContext) error {
-	// insert into audio_files
+	// insert audio_files
 	var id int64
 	sql := `INSERT INTO audio_files (s3_path_raw, filename, status, created_at) VALUES ($1, $2, 'uploaded', now()) RETURNING id`
 	err := db.Pool.QueryRow(ctx, sql, s3Path, filename).Scan(&id)
@@ -121,17 +122,15 @@ func insertAudioAndPublish(ctx context.Context, s3Path, filename string, s3clien
 		return err
 	}
 
-	// publish NATS JetStream event
-	ev := natspkg.IngestEvent{
+	// publish event to JetStream
+	ev := nats.IngestEvent{
 		AudioID:  id,
 		S3Path:   s3Path,
 		Filename: filename,
 	}
-	if err := natspkg.PublishIngestEvent(js, "audio.ingest.raw", ev); err != nil {
-		// log but do not fail hard — up to you (could set job status to 'publish_failed')
-		ilog.L.Printf("publish ingest event: %v", err)
+	if err := nats.PublishIngestEvent(js, "audio.ingest.raw", ev); err != nil {
+		// If publish fails, you may update ingestion_jobs.status = 'publish_failed'
 		return err
 	}
-
 	return nil
 }

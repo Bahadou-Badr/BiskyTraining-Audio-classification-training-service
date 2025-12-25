@@ -16,13 +16,14 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
+	// sensible local defaults (127.0.0.1 to avoid socket/localhost ambiguity on Windows)
 	cfg := &Config{
 		Port:           getEnv("PORT", "8080"),
-		DatabaseURL:    getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/audioml?sslmode=disable"),
+		DatabaseURL:    getEnv("DATABASE_URL", "postgres://backdev:pa55word@127.0.0.1:5432/audioml?sslmode=disable"),
 		NatsURL:        getEnv("NATS_URL", "nats://0.0.0.0:4222"),
-		MinioEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
-		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
-		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
+		MinioEndpoint:  getEnv("MINIO_ENDPOINT", "127.0.0.1:9000"),
+		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "miniouser"),
+		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "miniopass"),
 		MinioBucket:    getEnv("MINIO_BUCKET", "audio-raw"),
 		Env:            getEnv("ENV", "dev"),
 	}

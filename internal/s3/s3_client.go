@@ -17,9 +17,10 @@ type MinioClient struct {
 }
 
 func NewMinioClient(cfg *config.Config) (*MinioClient, error) {
+	// cfg.MinioEndpoint is like "127.0.0.1:9000"
 	minioClient, err := minio.New(cfg.MinioEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, ""),
-		Secure: false,
+		Secure: false, // local MinIO typically runs without TLS
 	})
 	if err != nil {
 		return nil, err
