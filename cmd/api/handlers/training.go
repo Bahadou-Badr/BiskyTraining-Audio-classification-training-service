@@ -1,16 +1,21 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
+	"audioml/internal/models"
+	"audioml/internal/trainer"
 	"audioml/internal/training"
 
 	"github.com/gorilla/mux"
 )
 
 type TrainingHandler struct {
-	Service *training.Service
+	TrainingService *training.Service
+	ModelService    *models.Service
+	TrainerRunner   *trainer.PythonRunner
 }
 
 type startTrainingRequest struct {
@@ -29,7 +34,7 @@ func (h *TrainingHandler) StartTraining(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	job, err := h.Service.StartJob(
+	job, err := h.TrainingService.StartJob(
 		r.Context(),
 		req.Dataset,
 		req.Model,
@@ -38,6 +43,44 @@ func (h *TrainingHandler) StartTraining(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// BACKGROUND EXECUTION
+	go func() {
+
+		// detached context
+		ctx := context.Background()
+		// mark running
+		_ = h.TrainingService.MarkRunning(ctx, job.ID.String())
+
+		// run python trainer
+		err := h.TrainerRunner.Run(
+			ctx,
+			trainer.Request{
+				JobID:   job.ID.String(),
+				Dataset: req.Dataset,
+				Model:   req.Model,
+			},
+		)
+
+		if err != nil {
+			msg := err.Error()
+			_ = h.TrainingService.MarkFailed(ctx, job.ID.String(), &msg)
+			return
+		}
+
+		// mark completed
+		_ = h.TrainingService.MarkCompleted(ctx, job.ID.String())
+
+		// register model version
+		_ = h.ModelService.RegisterFromTraining(
+			ctx,
+			job.ID.String(),
+			req.Model,
+			map[string]float64{"accuracy": 0.87},
+			map[string]any{"epochs": 10},
+			"s3://models/"+req.Model+"/v1/model.bin",
+		)
+	}()
 
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(job)

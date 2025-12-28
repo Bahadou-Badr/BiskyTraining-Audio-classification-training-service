@@ -99,3 +99,15 @@ func (s *Service) run(ctx context.Context, job *Job) {
 
 	_ = s.repo.UpdateStatus(ctx, job.ID.String(), StatusCompleted, nil)
 }
+
+func (s *Service) MarkRunning(ctx context.Context, jobID string) error {
+	return s.repo.UpdateStatus(ctx, jobID, StatusRunning, nil)
+}
+
+func (s *Service) MarkCompleted(ctx context.Context, jobID string) error {
+	return s.repo.UpdateStatus(ctx, jobID, StatusCompleted, nil)
+}
+
+func (s *Service) MarkFailed(ctx context.Context, jobID string, err *string) error {
+	return s.repo.UpdateStatus(ctx, jobID, StatusFailed, err)
+}

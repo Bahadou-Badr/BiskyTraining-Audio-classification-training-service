@@ -34,13 +34,21 @@ func main() {
 	// ======================
 	modelRepo := models.NewPostgresRepository(db.Pool)
 	modelService := models.NewService(modelRepo)
+	modelHandler := &handlers.ModelHandler{
+		Service: modelService,
+	}
+	modelHandler.Register(r)
 
 	// ======================
 	// Trainer (Python)
 	// ======================
+	// trainerRunner := trainer.NewPythonRunner(
+	// 	cfg.PythonPath,    // e.g. "python"
+	// 	cfg.TrainerScript, // e.g. "trainer/train.py"
+	// )
 	trainerRunner := trainer.NewPythonRunner(
-		cfg.PythonPath,    // e.g. "python"
-		cfg.TrainerScript, // e.g. "trainer/train.py"
+		"python",
+		"./trainer/train.py",
 	)
 
 	// ======================
@@ -54,7 +62,9 @@ func main() {
 	)
 
 	trainingHandler := &handlers.TrainingHandler{
-		Service: trainingService,
+		TrainingService: trainingService,
+		ModelService:    modelService,
+		TrainerRunner:   trainerRunner,
 	}
 
 	trainingHandler.Register(r)
