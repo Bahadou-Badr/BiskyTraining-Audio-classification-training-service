@@ -48,7 +48,7 @@ func main() {
 	// )
 	trainerRunner := trainer.NewPythonRunner(
 		"python",
-		"./trainer/train.py",
+		"./trainer/trainer.py",
 	)
 
 	// ======================

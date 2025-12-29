@@ -2,6 +2,8 @@ package training
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	"audioml/internal/models"
@@ -55,6 +57,14 @@ func (s *Service) StartJob(
 
 func (s *Service) run(ctx context.Context, job *Job) {
 	_ = s.repo.UpdateStatus(ctx, job.ID.String(), StatusRunning, nil)
+
+	datasetPath := filepath.Join("datasets", job.DatasetSource)
+
+	if _, err := os.Stat(datasetPath); err != nil {
+		msg := "dataset not found: " + datasetPath
+		_ = s.repo.UpdateStatus(ctx, job.ID.String(), StatusFailed, &msg)
+		return
+	}
 
 	err := s.trainerRunner.Run(ctx, trainer.Request{
 		JobID:   job.ID.String(),
