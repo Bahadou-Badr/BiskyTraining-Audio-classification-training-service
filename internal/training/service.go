@@ -55,7 +55,6 @@ func (s *Service) StartJob(
 		return nil, err
 	}
 
-	// 🚨 IMPORTANT FIX HERE
 	go s.run(context.Background(), job)
 
 	return job, nil
