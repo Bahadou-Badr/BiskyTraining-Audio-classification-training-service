@@ -2,8 +2,10 @@ package training
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"audioml/internal/models"
@@ -30,12 +32,16 @@ func NewService(
 	}
 }
 
-// StartJob creates + runs a training job asynchronously
 func (s *Service) StartJob(
 	ctx context.Context,
 	datasetSource string,
 	modelName string,
 ) (*Job, error) {
+
+	// DEMO CONTRACT
+	if !strings.HasPrefix(datasetSource, "local-audio/") {
+		return nil, errors.New("only local-audio datasets are supported")
+	}
 
 	job := &Job{
 		ID:            uuid.New(),
@@ -49,8 +55,8 @@ func (s *Service) StartJob(
 		return nil, err
 	}
 
-	// Run training async
-	go s.run(ctx, job)
+	// 🚨 IMPORTANT FIX HERE
+	go s.run(context.Background(), job)
 
 	return job, nil
 }
@@ -66,9 +72,9 @@ func (s *Service) run(ctx context.Context, job *Job) {
 		return
 	}
 
-	err := s.trainerRunner.Run(ctx, trainer.Request{
+	result, err := s.trainerRunner.Run(ctx, trainer.Request{
 		JobID:   job.ID.String(),
-		Dataset: job.DatasetSource,
+		Dataset: datasetPath,
 		Model:   job.ModelName,
 	})
 
@@ -78,27 +84,13 @@ func (s *Service) run(ctx context.Context, job *Job) {
 		return
 	}
 
-	// === Phase 4: register trained model ===
-	metrics := map[string]float64{
-		"accuracy": 0.91, // TODO: real metrics from trainer
-		"loss":     0.08,
-	}
-
-	hyperparams := map[string]any{
-		"epochs":  10,
-		"lr":      0.001,
-		"backend": "python",
-	}
-
-	artifactPath := "s3://models/" + job.ModelName + "/" + job.ID.String() + "/model.bin"
-
 	err = s.modelService.RegisterFromTraining(
 		ctx,
 		job.ID.String(),
 		job.ModelName,
-		metrics,
-		hyperparams,
-		artifactPath,
+		result.Metrics,
+		result.Params,
+		result.ArtifactPath,
 	)
 
 	if err != nil {
@@ -108,16 +100,4 @@ func (s *Service) run(ctx context.Context, job *Job) {
 	}
 
 	_ = s.repo.UpdateStatus(ctx, job.ID.String(), StatusCompleted, nil)
-}
-
-func (s *Service) MarkRunning(ctx context.Context, jobID string) error {
-	return s.repo.UpdateStatus(ctx, jobID, StatusRunning, nil)
-}
-
-func (s *Service) MarkCompleted(ctx context.Context, jobID string) error {
-	return s.repo.UpdateStatus(ctx, jobID, StatusCompleted, nil)
-}
-
-func (s *Service) MarkFailed(ctx context.Context, jobID string, err *string) error {
-	return s.repo.UpdateStatus(ctx, jobID, StatusFailed, err)
 }

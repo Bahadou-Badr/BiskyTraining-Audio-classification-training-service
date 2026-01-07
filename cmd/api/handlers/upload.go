@@ -19,7 +19,6 @@ import (
 	"audioml/internal/s3"
 )
 
-// UploadHandler handles file uploads and S3 URL registration
 type UploadHandler struct {
 	S3Client *s3.MinioClient
 	JS       natslib.JetStreamContext
@@ -37,7 +36,6 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	contentType := r.Header.Get("Content-Type")
 
-	// JSON -> register external S3 path
 	if contentType == "application/json" {
 		var req registerS3Req
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -82,7 +80,6 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	objectName := fmt.Sprintf("raw/%s%s", uuid.New().String(), ext)
 
 	// Stream upload directly to MinIO using PutObject
-	// We need the file size; if unknown, you can buffer, but streaming with a ReaderSeeker is better.
 	var buf bytes.Buffer
 	size, err := io.Copy(&buf, file)
 	if err != nil {
@@ -129,7 +126,7 @@ func insertAudioAndPublish(ctx context.Context, s3Path, filename string, s3clien
 		Filename: filename,
 	}
 	if err := nats.PublishIngestEvent(js, "audio.ingest.raw", ev); err != nil {
-		// If publish fails, you may update ingestion_jobs.status = 'publish_failed'
+		// Later not Now lol, update ingestion_jobs.status = 'publish_failed'
 		return err
 	}
 	return nil

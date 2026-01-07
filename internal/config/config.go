@@ -31,7 +31,7 @@ func Load() *Config {
 		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "miniopass"),
 		MinioBucket:    getEnv("MINIO_BUCKET", "audio-raw"),
 		PythonPath:     getEnv("PYTHON_PATH", "python"),
-		TrainerScript:  getEnv("TRAINER_SCRIPT", "trainer/train.py"),
+		TrainerScript:  getEnv("TRAINER_SCRIPT", "./trainer/trainer.py"),
 	}
 
 	log.Printf("Config loaded (env=%s)", cfg.Env)

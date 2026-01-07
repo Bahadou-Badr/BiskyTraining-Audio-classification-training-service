@@ -9,6 +9,7 @@ import (
 	"audioml/internal/db"
 	"audioml/internal/logger"
 	"audioml/internal/models"
+
 	"audioml/internal/trainer"
 	"audioml/internal/training"
 
@@ -22,56 +23,41 @@ func main() {
 	logger.InitLogger(cfg.Env)
 
 	// Database
-	// ctx := context.Background() // Create a context
 	db.Init(cfg.DatabaseURL)
 	defer db.Close()
 
-	// Router
 	r := mux.NewRouter()
 
-	// ======================
-	// Models (Phase 4)
-	// ======================
+	// Dataset Upload
+	datasetHandler := &handlers.DatasetUploadHandler{}
+	datasetHandler.Register(r)
+
+	// Models
 	modelRepo := models.NewPostgresRepository(db.Pool)
 	modelService := models.NewService(modelRepo)
+
 	modelHandler := &handlers.ModelHandler{
 		Service: modelService,
 	}
 	modelHandler.Register(r)
 
-	// ======================
 	// Trainer (Python)
-	// ======================
-	// trainerRunner := trainer.NewPythonRunner(
-	// 	cfg.PythonPath,    // e.g. "python"
-	// 	cfg.TrainerScript, // e.g. "trainer/train.py"
-	// )
 	trainerRunner := trainer.NewPythonRunner(
-		"python",
-		"./trainer/trainer.py",
+		cfg.PythonPath,
+		cfg.TrainerScript,
+		"artifacts", // shared output directory
 	)
 
-	// ======================
-	// Training (Phase 2–4)
-	// ======================
+	// Training (Job lifecycle only)
 	trainingRepo := training.NewPostgresRepo()
-	trainingService := training.NewService(
-		trainingRepo,
-		trainerRunner,
-		modelService,
-	)
+	trainingService := training.NewService(trainingRepo, trainerRunner, modelService)
 
 	trainingHandler := &handlers.TrainingHandler{
 		TrainingService: trainingService,
-		ModelService:    modelService,
-		TrainerRunner:   trainerRunner,
 	}
-
 	trainingHandler.Register(r)
 
-	// ======================
 	// Server
-	// ======================
 	log.Println("API listening on", cfg.HTTPAddr)
 	if err := http.ListenAndServe(cfg.HTTPAddr, r); err != nil {
 		log.Fatal(err)

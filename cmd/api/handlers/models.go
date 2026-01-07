@@ -25,11 +25,11 @@ func (h *ModelHandler) ListVersions(w http.ResponseWriter, r *http.Request) {
 
 	versions, err := h.Service.ListVersions(r.Context(), name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	_ = json.NewEncoder(w).Encode(versions)
+	json.NewEncoder(w).Encode(versions)
 }
 
 // GET /ml/models/{name}/active
