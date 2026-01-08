@@ -70,7 +70,7 @@ This keeps the system auditable and reproducible.
 
 ---
 
-## Database Table (Simplified)
+## Small Demo
 
 This demo shows the full flow: **dataset upload → training → model versioning → artifacts**.
 
@@ -94,14 +94,13 @@ API listening on :8080
 curl -X POST http://localhost:8080/datasets/upload \
   -F"dataset=demo2" \
   -F"files=@C:\test\call_test1.wav" \
-  -F"files=@C:\test\Downloads\call_test2.wav"
+  -F"files=@C:\test\call_test2.wav"
 ```
 
 Response:
 
 ```json
 {"dataset":"local-audio/demo2","files":2}
-
 ```
 
 Verify files are stored locally:
